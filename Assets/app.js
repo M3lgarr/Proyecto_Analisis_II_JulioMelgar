@@ -1,0 +1,385 @@
+
+
+(() => {
+    // Elementos DOM
+    const form = document.getElementById('taskForm');
+    const input = document.getElementById('title');
+    const prioritySel = document.getElementById('priority');
+    const list = document.getElementById('taskList');
+    const counterEl = document.getElementById('counter');
+    const errorMsg = document.getElementById('errorMsg');
+    const themeToggle = document.getElementById('themeToggle');
+    const searchInput = document.getElementById('searchInput');
+    const statusFilter = document.getElementById('statusFilter');
+    const priorityFilter = document.getElementById('priorityFilter');
+    const clearFilters = document.getElementById('clearFilters');
+    const clearCompleted = document.getElementById('clearCompleted');
+    const filterStatus = document.getElementById('filterStatus');
+
+    /** @typedef {"alta"|"media"|"baja"} Priority */
+    
+    /** 
+     * @type {{
+     *   id: string;
+     *   title: string;
+     *   completed: boolean;
+     *   priority: Priority;
+     *   createdAt: number;
+     *   updatedAt: number;
+     *   editing?: boolean;
+     * }[]} 
+     */
+    let tasks = [];
+    let nextId = 1;
+    let currentFilters = {
+        search: '',
+        status: 'all',
+        priority: 'all'
+    };
+
+    // --- PERSISTENCIA ---
+    function loadTasks() {
+        try {
+            const saved = localStorage.getItem('todo-tasks-v2');
+            if (saved) {
+                const parsed = JSON.parse(saved);
+                tasks = parsed.tasks || [];
+                nextId = parsed.nextId || (tasks.length > 0 ? Math.max(...tasks.map(t => parseInt(t.id))) + 1 : 1);
+            }
+        } catch (error) {
+            console.error('Error loading tasks:', error);
+            tasks = [];
+            nextId = 1;
+        }
+    }
+
+    function saveTasks() {
+        const data = {
+            tasks: tasks,
+            nextId: nextId,
+            timestamp: Date.now()
+        };
+        localStorage.setItem('todo-tasks-v2', JSON.stringify(data));
+    }
+
+    // --- MODO OSCURO ---
+    function loadTheme() {
+        const savedTheme = localStorage.getItem('todo-theme') || 'light';
+        document.documentElement.setAttribute('data-theme', savedTheme);
+        updateThemeToggle(savedTheme);
+    }
+
+    function toggleTheme() {
+        const currentTheme = document.documentElement.getAttribute('data-theme');
+        const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
+        
+        document.documentElement.setAttribute('data-theme', newTheme);
+        localStorage.setItem('todo-theme', newTheme);
+        updateThemeToggle(newTheme);
+    }
+
+    function updateThemeToggle(theme) {
+        themeToggle.textContent = theme === 'dark' ? '☀️' : '🌙';
+        themeToggle.title = theme === 'dark' ? 'Cambiar a modo claro' : 'Cambiar a modo oscuro';
+    }
+
+    // --- FILTRADO Y BÚSQUEDA ---
+    function getFilteredTasks() {
+        return tasks.filter(task => {
+            // Filtro de búsqueda
+            const matchesSearch = !currentFilters.search || 
+                task.title.toLowerCase().includes(currentFilters.search.toLowerCase());
+            
+            // Filtro de estado
+            const matchesStatus = currentFilters.status === 'all' ||
+                (currentFilters.status === 'pending' && !task.completed) ||
+                (currentFilters.status === 'completed' && task.completed);
+            
+            // Filtro de prioridad
+            const matchesPriority = currentFilters.priority === 'all' ||
+                task.priority === currentFilters.priority;
+            
+            return matchesSearch && matchesStatus && matchesPriority;
+        });
+    }
+
+    function updateFilterStatus() {
+        const filteredTasks = getFilteredTasks();
+        const totalTasks = tasks.length;
+        
+        if (filteredTasks.length === totalTasks) {
+            filterStatus.textContent = '';
+        } else {
+            filterStatus.textContent = `(${filteredTasks.length} de ${totalTasks})`;
+        }
+    }
+
+    function applyFilters() {
+        currentFilters = {
+            search: searchInput.value,
+            status: statusFilter.value,
+            priority: priorityFilter.value
+        };
+        render();
+    }
+
+    function clearAllFilters() {
+        searchInput.value = '';
+        statusFilter.value = 'all';
+        priorityFilter.value = 'all';
+        applyFilters();
+    }
+
+    function clearCompletedTasks() {
+        tasks = tasks.filter(task => !task.completed);
+        saveTasks();
+        applyFilters();
+    }
+
+    // --- RENDERIZADO ---
+    function updateCounter() {
+        const filteredTasks = getFilteredTasks();
+        const total = filteredTasks.length;
+        const completed = filteredTasks.filter(t => t.completed).length;
+        
+        counterEl.textContent = total === 0 ? '0 tareas' : 
+                               `${completed}/${total} tareas`;
+    }
+
+    function priClass(p) { return `badge-pri ${p}`; }
+    function priLabel(p) { return p === 'alta' ? 'Alta' : p === 'baja' ? 'Baja' : 'Media'; }
+
+    function render() {
+        const filteredTasks = getFilteredTasks();
+        
+        if (filteredTasks.length === 0) {
+            const noResultsMessage = currentFilters.search || currentFilters.status !== 'all' || currentFilters.priority !== 'all' 
+                ? '<p class="empty-hint">No hay tareas que coincidan con los filtros</p>'
+                : '<p class="empty-hint">Agrega una tarea para comenzar</p>';
+                
+            list.innerHTML = `
+                <div class="empty-state">
+                    <p>No hay tareas pendientes</p>
+                    ${noResultsMessage}
+                </div>
+            `;
+            updateCounter();
+            updateFilterStatus();
+            return;
+        }
+
+        list.innerHTML = '';
+        
+        filteredTasks.forEach(task => {
+            const li = document.createElement('li');
+            li.className = 'task-item';
+            li.dataset.id = task.id;
+
+            const left = document.createElement('div');
+            left.className = 'task-left';
+
+            // Checkbox mejorado
+            const chk = document.createElement('div');
+            chk.className = `task-toggle ${task.completed ? 'checked' : ''}`;
+            chk.title = task.completed ? 'Marcar como pendiente' : 'Marcar como completada';
+            chk.addEventListener('click', () => toggleDone(task.id));
+            left.appendChild(chk);
+
+            // Contenido principal
+            if (task.editing) {
+                const editInput = document.createElement('input');
+                editInput.className = 'edit-input';
+                editInput.type = 'text';
+                editInput.value = task.title;  
+                editInput.maxLength = 120;
+                editInput.addEventListener('keydown', (ev) => {
+                    if (ev.key === 'Enter') saveEdit(task.id, editInput.value.trim()); 
+                    if (ev.key === 'Escape') cancelEdit(task.id);
+                });
+                left.appendChild(editInput);
+                setTimeout(() => editInput.focus(), 0);
+            } else {
+                const titleEl = document.createElement('span');
+                titleEl.className = 'task-title' + (task.completed ? ' done' : '');
+                titleEl.textContent = task.title;
+                left.appendChild(titleEl);
+            }
+
+            const right = document.createElement('div');
+            right.className = 'task-right';
+
+            if (task.editing) {
+                // Modo edición
+                const sel = document.createElement('select');
+                sel.innerHTML = `
+                    <option value="alta" ${task.priority === 'alta' ? 'selected' : ''}>Alta</option>
+                    <option value="media" ${task.priority === 'media' ? 'selected' : ''}>Media</option>
+                    <option value="baja" ${task.priority === 'baja' ? 'selected' : ''}>Baja</option>`;
+                sel.addEventListener('change', () => { 
+                    task.priority = sel.value; 
+                });
+                right.appendChild(sel);
+
+                const saveBtn = document.createElement('button');
+                saveBtn.className = 'icon-btn';
+                saveBtn.innerHTML = '💾';
+                saveBtn.title = 'Guardar';
+                saveBtn.addEventListener('click', () => {
+                    const newTitle = left.querySelector('.edit-input').value.trim();
+                    saveEdit(task.id, newTitle);
+                });
+                right.appendChild(saveBtn);
+
+                const cancelBtn = document.createElement('button');
+                cancelBtn.className = 'icon-btn';
+                cancelBtn.innerHTML = '❌';
+                cancelBtn.title = 'Cancelar';
+                cancelBtn.addEventListener('click', () => cancelEdit(task.id));
+                right.appendChild(cancelBtn);
+
+            } else {
+                // Modo visualización
+                const pri = document.createElement('span');
+                pri.className = priClass(task.priority);
+                pri.textContent = priLabel(task.priority);
+                right.appendChild(pri);
+
+                const editBtn = document.createElement('button');
+                editBtn.className = 'icon-btn edit';
+                editBtn.innerHTML = '✏️';
+                editBtn.title = 'Editar tarea';
+                editBtn.addEventListener('click', () => startEdit(task.id));
+                right.appendChild(editBtn);
+
+                const delBtn = document.createElement('button');
+                delBtn.className = 'icon-btn delete';
+                delBtn.innerHTML = '🗑️';
+                delBtn.title = 'Eliminar tarea';
+                delBtn.addEventListener('click', () => removeTask(task.id));
+                right.appendChild(delBtn);
+            }
+
+            li.appendChild(left);
+            li.appendChild(right);
+            list.appendChild(li);
+        });
+
+        updateCounter();
+        updateFilterStatus();
+    }
+
+    // --- OPERACIONES CRUD ---
+    function addTask(title) {
+        const newTask = { 
+            id: (nextId++).toString(),
+            title, 
+            completed: false,
+            priority: prioritySel.value || 'media',
+            createdAt: Date.now(),
+            updatedAt: Date.now()
+        };
+        
+        tasks.push(newTask);
+        saveTasks();
+        applyFilters();
+        input.focus();
+    }
+
+    function removeTask(id) {
+        tasks = tasks.filter(t => t.id !== id);
+        saveTasks();
+        applyFilters();
+    }
+
+    function toggleDone(id) {
+        const task = tasks.find(t => t.id === id);
+        if (task) {
+            task.completed = !task.completed;
+            task.updatedAt = Date.now();
+            saveTasks();
+            applyFilters();
+        }
+    }
+
+    function startEdit(id) {
+        tasks.forEach(t => t.editing = false);
+        const task = tasks.find(t => t.id === id);
+        if (task) {
+            task.editing = true;
+            render();
+        }
+    }
+
+    function saveEdit(id, newTitle) {
+        if (!newTitle) return;
+        
+        const task = tasks.find(t => t.id === id);
+        if (task) {
+            task.title = newTitle;
+            task.editing = false;
+            task.updatedAt = Date.now();
+            saveTasks();
+            applyFilters();
+        }
+    }
+
+    function cancelEdit(id) {
+        const task = tasks.find(t => t.id === id);
+        if (task) {
+            task.editing = false;
+            render();
+        }
+    }
+
+    // --- VALIDACIÓN ---
+    function isValidTitle(text) {
+        return text && text.trim().length > 0;
+    }
+
+    function showError(message) {
+        errorMsg.textContent = message;
+        errorMsg.hidden = false;
+    }
+
+    function hideError() {
+        errorMsg.hidden = true;
+    }
+
+    // --- EVENT LISTENERS ---
+    form.addEventListener('submit', (e) => {
+        e.preventDefault();
+        const value = input.value.trim();
+
+        if (!isValidTitle(value)) {
+            showError('El título es obligatorio.');
+            input.focus();
+            return;
+        }
+
+        hideError();
+        addTask(value);
+        input.value = '';
+        prioritySel.value = 'media';
+    });
+
+    input.addEventListener('input', hideError);
+    
+    // Filtros
+    searchInput.addEventListener('input', applyFilters);
+    statusFilter.addEventListener('change', applyFilters);
+    priorityFilter.addEventListener('change', applyFilters);
+    clearFilters.addEventListener('click', clearAllFilters);
+    clearCompleted.addEventListener('click', clearCompletedTasks);
+    
+    // Tema
+    themeToggle.addEventListener('click', toggleTheme);
+
+    // --- INICIALIZACIÓN ---
+    function init() {
+        loadTheme();
+        loadTasks();
+        applyFilters();
+    }
+
+    init();
+})();
